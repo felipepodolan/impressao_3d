@@ -5,10 +5,13 @@ malha única e fechada, e acrescenta:
   - rugas (frisos em dente de serra) no lado interno das ripas, para as
     raízes da orquídea se prenderem;
   - anel reforçado no topo e na base das paredes laterais;
-  - pezinhos radiais embaixo, que levantam o vaso e deixam a água escorrer.
+  - pezinhos radiais embaixo, que levantam o vaso e deixam a água escorrer;
+  - pontes (peças separadas, 3 tamanhos) que se apoiam no anel do topo e têm
+    furos ao longo de todo o comprimento para posicionar os arames da haste.
 
 Uso:  pip install manifold3d trimesh numpy
-      python3 gerar_vaso.py            -> vaso_orquidea_rugas_pes.stl
+      python3 gerar_vaso.py   -> vaso_orquidea_rugas_pes.stl
+                                 ponte_arames_{G,M,P}.stl
 Todas as medidas em mm. O corpo do vaso começa em z = 0 (face de baixo do
 fundo); os pés ficam abaixo disso e o modelo é transladado para apoiar em z = 0.
 """
@@ -59,6 +62,18 @@ PE_R_EXT = 50.0
 # ---- Furos de drenagem no fundo ---------------------------------------------
 FURO_D = 6.0
 
+# ---- Pontes para os arames da haste (peças separadas) -----------------------
+# Cada ponte é uma barra que atravessa o vaso de um lado a outro do anel do
+# topo (uma corda do círculo) e fica acima do substrato. "Afastamento" é a
+# distância da ponte até o centro do vaso: 0 = passa pelo meio (diâmetro).
+PONTES = (("G", 0.0), ("M", 40.0), ("P", 65.0))
+PONTE_LARG = 8.0       # largura da barra
+PONTE_ALT = 6.0        # altura da barra
+PONTE_FURO_D = 3.4     # furos para o arame (até ~3 mm)
+PONTE_PASSO = 7.0      # distância entre furos
+PONTE_FOLGA = 0.3      # folga dos encaixes em relação ao anel
+PONTE_ESP = 2.0        # espessura das paredes dos encaixes
+
 SEG = 256  # segmentos de círculo
 
 
@@ -71,13 +86,14 @@ def r_ext(z):
     return r_int(z) + ESP_PAREDE
 
 
-def revolve(pontos_rz):
+def revolve(pontos_rz, graus=360.0):
     """Gira o perfil (r, z) em torno do eixo Z."""
     p = np.array(pontos_rz)
     area = np.sum(p[:, 0] * np.roll(p[:, 1], -1) - np.roll(p[:, 0], -1) * p[:, 1])
     if area < 0:  # CrossSection espera contorno anti-horário
         p = p[::-1]
-    return CrossSection([p.tolist()]).revolve(circular_segments=SEG)
+    return CrossSection([p.tolist()]).revolve(circular_segments=SEG,
+                                              revolve_degrees=graus)
 
 
 def bloco_inclinado(ang, r0, r1, larg0, z0, r2, r3, larg1, z1):
@@ -134,6 +150,70 @@ def anel_topo():
         (ANEL_TOPO_R_EXT, ALTURA),
         (ri, ALTURA),
     ])
+
+
+def ponte(afastamento, posicao_impressao=True):
+    """Barra reta com furos para arame ao longo de todo o comprimento e, em
+    cada ponta, um encaixe em U invertido que se apoia por cima do anel do
+    topo (uma perna por dentro, outra por fora). Ela só é apoiada: dá para
+    deslizar a ponte ao longo do anel e escolher a posição.
+    Sai na posição de impressão (face de cima na mesa, sem suporte)."""
+    z0 = ALTURA - ANEL_TOPO_ALT
+    ri = r_int(z0) - 0.5                       # face interna do anel
+    c, t = PONTE_FOLGA, PONTE_ESP
+    z_top = ALTURA + c                         # face de baixo da ponte
+    z_sup = z_top + t                          # face de cima
+    r_perna = ri - c                           # face da perna interna
+    meia_corda = math.sqrt(r_perna ** 2 - afastamento ** 2)
+    meio_arco = (PONTE_LARG / 2 + t + 2.0) / ri       # rad, meia largura do U
+
+    # Tampo: face de cima inteira numa peça só (barra + topo dos dois U),
+    # para não haver faces coplanares entre as partes.
+    def arco(r0, r1, centro):
+        angs = np.linspace(centro - meio_arco, centro + meio_arco, 24)
+        ext = [(r1 * math.cos(a), r1 * math.sin(a)) for a in angs]
+        int_ = [(r0 * math.cos(a), r0 * math.sin(a)) for a in angs[::-1]]
+        return CrossSection([ext + int_])
+
+    angs_pontas = [math.atan2(lado * meia_corda, afastamento) for lado in (1, -1)]
+    barra2d = CrossSection.square((PONTE_LARG, 2 * meia_corda + 10)) \
+        .translate((afastamento - PONTE_LARG / 2, -meia_corda - 5)) \
+        ^ CrossSection.circle(r_perna - 0.5, SEG)
+    tampo2d = barra2d
+    for ang in angs_pontas:
+        tampo2d = tampo2d + arco(r_perna - t, ANEL_TOPO_R_EXT + c + t, ang)
+    pecas = [tampo2d.extrude(t).translate((0, 0, z_top))]
+
+    # corpo da barra, embutido 0,5 mm no tampo
+    pecas.append(barra2d.extrude(PONTE_ALT - t + 0.5)
+                 .translate((0, 0, z_sup - PONTE_ALT)))
+
+    # pernas do U: interna (desce por dentro do anel) e aba externa
+    pernas = [
+        [(r_perna - t, z0 - 1.0), (r_perna, z0 - 1.0),
+         (r_perna, z_top + 0.5), (r_perna - t, z_top + 0.5)],
+        [(ANEL_TOPO_R_EXT + c, z0 + 3.5), (ANEL_TOPO_R_EXT + c + t, z0 + 3.5),
+         (ANEL_TOPO_R_EXT + c + t, z_top + 0.5), (ANEL_TOPO_R_EXT + c, z_top + 0.5)],
+    ]
+    graus = math.degrees(2 * meio_arco - 0.6 / ri)  # um pouco mais estreitas
+    for ang in angs_pontas:
+        for perfil in pernas:
+            pecas.append(revolve(perfil, graus)
+                         .rotate((0, 0, math.degrees(ang) - graus / 2)))
+    peca = Manifold.batch_boolean(pecas, OpType.Add)
+
+    # furos ao longo de toda a barra, simétricos a partir do centro
+    n = int((meia_corda - t - PONTE_FURO_D) // PONTE_PASSO)
+    furo = Manifold.cylinder(PONTE_ALT + 2, PONTE_FURO_D / 2, PONTE_FURO_D / 2, 32)
+    furos_ = [furo.translate((afastamento, k * PONTE_PASSO, z_sup - PONTE_ALT - 1))
+              for k in range(-n, n + 1)]
+    peca = peca - Manifold.batch_boolean(furos_, OpType.Add)
+
+    if not posicao_impressao:
+        return peca.translate((0, 0, PE_ALTURA)), 2 * n + 1  # montada no vaso
+    peca = peca.rotate((180, 0, 0))            # de cabeça para baixo
+    (x0, y0, zmin, x1, y1, _) = peca.bounding_box()
+    return peca.translate((-(x0 + x1) / 2, -(y0 + y1) / 2, -zmin)), 2 * n + 1
 
 
 def fundo_e_anel_base():
@@ -200,14 +280,21 @@ def gerar():
     return corpo.translate((0, 0, PE_ALTURA))
 
 
-def main(saida="vaso_orquidea_rugas_pes.stl"):
-    vaso = gerar()
-    m = vaso.to_mesh()
+def exportar(peca, saida):
+    m = peca.to_mesh()
     malha = trimesh.Trimesh(vertices=m.vert_properties[:, :3], faces=m.tri_verts)
     malha.export(saida)
     print(f"{saida}: {len(malha.faces)} triângulos, "
           f"fechada={malha.is_watertight}, volume={malha.volume / 1000:.1f} cm³, "
           f"dimensões={np.round(malha.extents, 1).tolist()} mm")
+
+
+def main():
+    exportar(gerar(), "vaso_orquidea_rugas_pes.stl")
+    for nome, afastamento in PONTES:
+        peca, n_furos = ponte(afastamento)
+        exportar(peca, f"ponte_arames_{nome}.stl")
+        print(f"   ponte {nome}: {n_furos} furos")
 
 
 if __name__ == "__main__":
