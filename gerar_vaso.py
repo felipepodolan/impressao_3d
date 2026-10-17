@@ -5,10 +5,13 @@ malha única e fechada, e acrescenta:
   - rugas (frisos em dente de serra) no lado interno das ripas, para as
     raízes da orquídea se prenderem;
   - anel reforçado no topo e na base das paredes laterais;
-  - pezinhos radiais embaixo, que levantam o vaso e deixam a água escorrer.
+  - pezinhos radiais embaixo, que levantam o vaso e deixam a água escorrer;
+  - suporte (clipe) que encaixa no anel do topo e segura o arame da haste,
+    em 3 tamanhos de arame (peças separadas).
 
 Uso:  pip install manifold3d trimesh numpy
-      python3 gerar_vaso.py            -> vaso_orquidea_rugas_pes.stl
+      python3 gerar_vaso.py   -> vaso_orquidea_rugas_pes.stl
+                                 suporte_arame_{2,3,4}mm.stl
 Todas as medidas em mm. O corpo do vaso começa em z = 0 (face de baixo do
 fundo); os pés ficam abaixo disso e o modelo é transladado para apoiar em z = 0.
 """
@@ -59,6 +62,14 @@ PE_R_EXT = 50.0
 # ---- Furos de drenagem no fundo ---------------------------------------------
 FURO_D = 6.0
 
+# ---- Suporte do arame (peça separada, encaixa no anel do topo) --------------
+ARAMES_D = (2.0, 3.0, 4.0)   # diâmetro do arame/tutor de cada versão
+SUP_FOLGA = 0.3        # folga entre o clipe e o anel
+SUP_ESP = 2.0          # espessura das paredes do clipe
+SUP_COMPR = 14.0       # comprimento do clipe ao longo do anel
+SUP_FOLGA_ARAME = 0.4  # folga do furo em relação ao arame
+SUP_CHANFRO = 1.5      # chanfro no canto interno do clipe (facilita encaixar)
+
 SEG = 256  # segmentos de círculo
 
 
@@ -71,13 +82,14 @@ def r_ext(z):
     return r_int(z) + ESP_PAREDE
 
 
-def revolve(pontos_rz):
+def revolve(pontos_rz, graus=360.0):
     """Gira o perfil (r, z) em torno do eixo Z."""
     p = np.array(pontos_rz)
     area = np.sum(p[:, 0] * np.roll(p[:, 1], -1) - np.roll(p[:, 0], -1) * p[:, 1])
     if area < 0:  # CrossSection espera contorno anti-horário
         p = p[::-1]
-    return CrossSection([p.tolist()]).revolve(circular_segments=SEG)
+    return CrossSection([p.tolist()]).revolve(circular_segments=SEG,
+                                              revolve_degrees=graus)
 
 
 def bloco_inclinado(ang, r0, r1, larg0, z0, r2, r3, larg1, z1):
@@ -132,8 +144,67 @@ def anel_topo():
         (r_ext(z0), z0),
         (ANEL_TOPO_R_EXT, z0 + 3.5),   # chanfro externo ~45°, sem suporte
         (ANEL_TOPO_R_EXT, ALTURA),
-        (ri, ALTURA),
+        (ri + SUP_CHANFRO, ALTURA),     # chanfro interno: assento do suporte
+        (ri, ALTURA - SUP_CHANFRO),
     ])
+
+
+def r_chanfro_topo(z):
+    """Raio da face externa chanfrada do anel do topo na altura z."""
+    z0 = ALTURA - ANEL_TOPO_ALT
+    return r_ext(z0) + (ANEL_TOPO_R_EXT - r_ext(z0)) * (z - z0) / 3.5
+
+
+def suporte_arame(d_arame, posicao_impressao=True):
+    """Clipe em U invertido que abraça o anel do topo, com um tubo vertical
+    no lado de dentro do vaso para o arame da haste.
+
+    Encaixe: engate primeiro a garra externa sob o chanfro do anel e gire o
+    clipe para dentro até a perna interna descer rente ao anel. A garra impede
+    que ele saia puxando para cima.
+    Sai na posição de impressão (topo do clipe na mesa, sem suporte)."""
+    z0 = ALTURA - ANEL_TOPO_ALT
+    ri = r_int(z0) - 0.5                       # face interna do anel
+    c, t = SUP_FOLGA, SUP_ESP
+    z_top = ALTURA + c
+    z_garra = z0 + 1.8                         # até onde a garra desce
+    r_perna = ri - c - 0.2                     # face da perna interna
+    d_furo = d_arame + SUP_FOLGA_ARAME
+    r_tubo = d_furo / 2 + 2.0
+    rc = r_perna - t - r_tubo + 1.0            # tubo colado na perna interna
+    r_ponte = rc - r_tubo - 1.0                # a ponte cobre o tubo inteiro
+    perfil = [
+        (r_perna - t, z0 - 1.0),               # pé da perna interna
+        (r_perna, z0 - 1.0),
+        (r_perna, z_top - SUP_CHANFRO),        # chanfro: livra o canto do
+        (r_perna + SUP_CHANFRO, z_top),        # anel ao girar o clipe
+        (ANEL_TOPO_R_EXT + c, z_top),
+        (ANEL_TOPO_R_EXT + c, z0 + 3.5),       # desce pela face externa
+        (r_chanfro_topo(z_garra) + c, z_garra),  # garra acompanha o chanfro
+        (r_chanfro_topo(z_garra) + c + t, z_garra - 0.6),
+        (ANEL_TOPO_R_EXT + c + t, z0 + 3.5),
+        (ANEL_TOPO_R_EXT + c + t, z_top + t),
+        (r_ponte, z_top + t),
+        (r_ponte, z_top),
+        (r_perna - t, z_top),
+    ]
+    graus = math.degrees(SUP_COMPR / ri)
+    clipe = revolve(perfil, graus).rotate((0, 0, -graus / 2))
+
+    # tubo embutido na ponte e um pouco mais comprido embaixo (sem faces
+    # coplanares com o clipe)
+    z_tubo0, z_tubo1 = z0 - 1.5, z_top + t - 0.5
+    tubo = Manifold.cylinder(z_tubo1 - z_tubo0, r_tubo, r_tubo, 64) \
+        .translate((rc, 0, z_tubo0))
+    furo = Manifold.cylinder(z_top + t - z_tubo0 + 2, d_furo / 2, d_furo / 2, 32) \
+        .translate((rc, 0, z_tubo0 - 1.0))
+    peca = (clipe + tubo) - furo
+    if not posicao_impressao:
+        return peca.translate((0, 0, PE_ALTURA))  # montado no vaso
+    # posição de impressão: de cabeça para baixo, centrada na origem
+    peca = peca.rotate((180, 0, 0))
+    (x0, y0, zmin, x1, y1, _) = peca.bounding_box()
+    return peca.translate((-(x0 + x1) / 2, -(y0 + y1) / 2, -zmin))
 
 
 def fundo_e_anel_base():
@@ -200,14 +271,19 @@ def gerar():
     return corpo.translate((0, 0, PE_ALTURA))
 
 
-def main(saida="vaso_orquidea_rugas_pes.stl"):
-    vaso = gerar()
-    m = vaso.to_mesh()
+def exportar(peca, saida):
+    m = peca.to_mesh()
     malha = trimesh.Trimesh(vertices=m.vert_properties[:, :3], faces=m.tri_verts)
     malha.export(saida)
     print(f"{saida}: {len(malha.faces)} triângulos, "
           f"fechada={malha.is_watertight}, volume={malha.volume / 1000:.1f} cm³, "
           f"dimensões={np.round(malha.extents, 1).tolist()} mm")
+
+
+def main():
+    exportar(gerar(), "vaso_orquidea_rugas_pes.stl")
+    for d in ARAMES_D:
+        exportar(suporte_arame(d), f"suporte_arame_{d:g}mm.stl")
 
 
 if __name__ == "__main__":
